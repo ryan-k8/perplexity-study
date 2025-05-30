@@ -4,8 +4,8 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-  "dev": "ts-node src/index.ts",
-  "build": "tsc"
+    "dev": "ts-node src/main.ts",
+    "build": "tsc"
   },
   "keywords": [],
   "author": "",
@@ -15,5 +15,10 @@
     "@types/node": "^22.15.21",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "mammoth": "^1.9.0",
+    "unzipper": "^0.12.3",
+    "xml2js": "^0.6.2"
   }
 }
