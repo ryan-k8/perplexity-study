@@ -1,9 +1,12 @@
 import fs from "fs";
 import path from "path";
-import { execSync } from "child_process";
+import { exec } from "child_process";
+import { promisify } from "util";
 import mammoth from "mammoth";
 import unzipper from "unzipper";
 import { parseStringPromise } from "xml2js";
+
+const execAsync = promisify(exec);
 
 const inputFile = process.argv[2];
 if (!inputFile) {
@@ -16,16 +19,16 @@ const base = path.basename(inputFile, ext);
 const outputDir = `res_${base}`;
 fs.mkdirSync(outputDir, { recursive: true });
 
-function extractTextPDF(pdfPath: string): string[] {
+async function extractTextPDF(pdfPath: string): Promise<string[]> {
   const textFile = path.join(outputDir, "raw_text.txt");
-  execSync(`pdftotext -layout -nopgbrk "${pdfPath}" "${textFile}"`);
+  await execAsync(`pdftotext -q -layout -nopgbrk "${pdfPath}" "${textFile}"`);
   const raw = fs.readFileSync(textFile, "utf-8");
   return raw.split(/\f/).map((p) => p.trim());
 }
 
-function extractImagesPDF(pdfPath: string): string[] {
-  execSync(
-    `pdftoppm -png -rx 100 -ry 100 "${pdfPath}" "${path.join(
+async function extractImagesPDF(pdfPath: string): Promise<string[]> {
+  await execAsync(
+    `pdftoppm -q -png -rx 100 -ry 100 "${pdfPath}" "${path.join(
       outputDir,
       "page",
     )}"`,
@@ -48,16 +51,15 @@ async function extractImagesDOCX(docxPath: string): Promise<string[]> {
   const mediaFiles = archive.files.filter((f) =>
     f.path.startsWith("word/media/"),
   );
-  const imagePaths: string[] = [];
-  let count = 0;
-  for (const file of mediaFiles) {
-    const ext = path.extname(file.path);
-    const outPath = path.join(outputDir, `doc-img-${++count}${ext}`);
-    const content = await file.buffer();
-    fs.writeFileSync(outPath, content);
-    imagePaths.push(outPath);
-  }
-  return imagePaths;
+  return Promise.all(
+    mediaFiles.map(async (file, i) => {
+      const ext = path.extname(file.path);
+      const outPath = path.join(outputDir, `doc-img-${i + 1}${ext}`);
+      const content = await file.buffer();
+      fs.writeFileSync(outPath, content);
+      return outPath;
+    }),
+  );
 }
 
 async function extractTextSlidesPPTX(
@@ -66,26 +68,25 @@ async function extractTextSlidesPPTX(
   const slides = archive.files
     .filter((f) => f.path.match(/^ppt\/slides\/slide\d+\.xml$/))
     .sort((a, b) => a.path.localeCompare(b.path));
-  const texts: string[] = [];
-  for (const slide of slides) {
-    const content = await slide.buffer();
-    const parsed = await parseStringPromise(content.toString());
-    const shapes =
-      parsed["p:sld"]?.["p:cSld"]?.[0]?.["p:spTree"]?.[0]?.["p:sp"] || [];
-    const text = shapes
-      .map((shape: any) => {
-        const ps = shape["p:txBody"]?.[0]?.["a:p"] || [];
-        return ps
-          .map((p: any) =>
-            (p["a:r"] || []).map((r: any) => r["a:t"]?.[0] || "").join(""),
-          )
-          .join("\n");
-      })
-      .join("\n")
-      .trim();
-    texts.push(text);
-  }
-  return texts;
+  return Promise.all(
+    slides.map(async (slide) => {
+      const content = await slide.buffer();
+      const parsed = await parseStringPromise(content.toString());
+      const shapes =
+        parsed["p:sld"]?.["p:cSld"]?.[0]?.["p:spTree"]?.[0]?.["p:sp"] || [];
+      return shapes
+        .map((shape: any) => {
+          const ps = shape["p:txBody"]?.[0]?.["a:p"] || [];
+          return ps
+            .map((p: any) =>
+              (p["a:r"] || []).map((r: any) => r["a:t"]?.[0] || "").join(""),
+            )
+            .join("\n");
+        })
+        .join("\n")
+        .trim();
+    }),
+  );
 }
 
 async function extractImagesPPTX(
@@ -94,15 +95,15 @@ async function extractImagesPPTX(
   const mediaFiles = archive.files.filter((f) =>
     f.path.startsWith("ppt/media/"),
   );
-  const imagePaths: string[] = [];
-  let count = 0;
-  for (const file of mediaFiles) {
-    const ext = path.extname(file.path);
-    const outPath = path.join(outputDir, `slide-${++count}${ext}`);
-    const content = await file.buffer();
-    fs.writeFileSync(outPath, content);
-    imagePaths.push(outPath);
-  }
+  const imagePaths = await Promise.all(
+    mediaFiles.map(async (file, i) => {
+      const ext = path.extname(file.path);
+      const outPath = path.join(outputDir, `slide-${i + 1}${ext}`);
+      const content = await file.buffer();
+      fs.writeFileSync(outPath, content);
+      return outPath;
+    }),
+  );
   return imagePaths.sort();
 }
 
@@ -116,44 +117,51 @@ async function extract(inputFile: string, ext: string): Promise<void> {
   const outputJSON: {
     text: string;
     image: string;
-    image_base64_content: string;
+    // image_base64_content: string;
   }[] = [];
 
   if (ext === ".pdf") {
-    const texts = extractTextPDF(inputFile);
-    const images = extractImagesPDF(inputFile);
+    const [texts, images] = await Promise.all([
+      extractTextPDF(inputFile),
+      extractImagesPDF(inputFile),
+    ]);
     for (let i = 0; i < Math.max(texts.length, images.length); i++) {
       const imagePath = images[i] || "";
       outputJSON.push({
         text: texts[i] || "",
         image: imagePath,
-        image_base64_content: encodeBase64(imagePath),
+        // image_base64_content: encodeBase64(imagePath),
       });
     }
   } else if (ext === ".docx") {
-    const text = await extractTextDOCX(inputFile);
-    const images = await extractImagesDOCX(inputFile);
+    const [text, images] = await Promise.all([
+      extractTextDOCX(inputFile),
+      extractImagesDOCX(inputFile),
+    ]);
     if (images.length === 0) {
-      outputJSON.push({ text, image: "", image_base64_content: "" });
+      outputJSON.push({ text, image: "" });
+      // outputJSON.push({ text, image: "", image_base64_content: "" });
     } else {
       for (const img of images) {
         outputJSON.push({
           text,
           image: img,
-          image_base64_content: encodeBase64(img),
+          // image_base64_content: encodeBase64(img),
         });
       }
     }
   } else if (ext === ".pptx") {
     const archive = await unzipper.Open.file(inputFile);
-    const texts = await extractTextSlidesPPTX(archive);
-    const images = await extractImagesPPTX(archive);
+    const [texts, images] = await Promise.all([
+      extractTextSlidesPPTX(archive),
+      extractImagesPPTX(archive),
+    ]);
     for (let i = 0; i < Math.max(texts.length, images.length); i++) {
       const imagePath = images[i] || "";
       outputJSON.push({
         text: texts[i] || "",
         image: imagePath,
-        image_base64_content: encodeBase64(imagePath),
+        // image_base64_content: encodeBase64(imagePath),
       });
     }
   }
