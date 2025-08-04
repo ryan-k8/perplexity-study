@@ -31,8 +31,8 @@ async function extractImagesPDF(pdfPath: string): Promise<string[]> {
   await execAsync(
     `pdftoppm -q -png -rx 100 -ry 100 "${pdfPath}" "${path.join(
       outputDir,
-      "page",
-    )}"`,
+      "page"
+    )}"`
   );
   return fs
     .readdirSync(outputDir)
@@ -50,7 +50,7 @@ async function extractTextDOCX(docxPath: string): Promise<string> {
 async function extractImagesDOCX(docxPath: string): Promise<string[]> {
   const archive = await unzipper.Open.file(docxPath);
   const mediaFiles = archive.files.filter((f) =>
-    f.path.startsWith("word/media/"),
+    f.path.startsWith("word/media/")
   );
   return Promise.all(
     mediaFiles.map(async (file, i) => {
@@ -59,12 +59,12 @@ async function extractImagesDOCX(docxPath: string): Promise<string[]> {
       const content = await file.buffer();
       fs.writeFileSync(outPath, content);
       return outPath;
-    }),
+    })
   );
 }
 
 async function extractTextSlidesPPTX(
-  archive: unzipper.CentralDirectory,
+  archive: unzipper.CentralDirectory
 ): Promise<string[]> {
   const slides = archive.files
     .filter((f) => f.path.match(/^ppt\/slides\/slide\d+\.xml$/))
@@ -80,21 +80,21 @@ async function extractTextSlidesPPTX(
           const ps = shape["p:txBody"]?.[0]?.["a:p"] || [];
           return ps
             .map((p: any) =>
-              (p["a:r"] || []).map((r: any) => r["a:t"]?.[0] || "").join(""),
+              (p["a:r"] || []).map((r: any) => r["a:t"]?.[0] || "").join("")
             )
             .join("\n");
         })
         .join("\n")
         .trim();
-    }),
+    })
   );
 }
 
 async function extractImagesPPTX(
-  archive: unzipper.CentralDirectory,
+  archive: unzipper.CentralDirectory
 ): Promise<string[]> {
   const mediaFiles = archive.files.filter((f) =>
-    f.path.startsWith("ppt/media/"),
+    f.path.startsWith("ppt/media/")
   );
   const imagePaths = await Promise.all(
     mediaFiles.map(async (file, i) => {
@@ -103,7 +103,7 @@ async function extractImagesPPTX(
       const content = await file.buffer();
       fs.writeFileSync(outPath, content);
       return outPath;
-    }),
+    })
   );
   return imagePaths.sort();
 }
@@ -169,9 +169,8 @@ async function extract(inputFile: string, ext: string): Promise<void> {
 
   fs.writeFileSync(
     path.join(outputDir, "output.json"),
-    JSON.stringify(outputJSON, null, 2),
+    JSON.stringify(outputJSON, null, 2)
   );
 }
 
 extract(inputFile, ext).catch(console.error);
-
