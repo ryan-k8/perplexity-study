@@ -50,94 +50,28 @@ const upload = multer({
   }
 });
 
-async function extractTextPDF(pdfPath: string, outputDir: string): Promise<string[]> {
-  const textFile = path.join(outputDir, 'raw_text.txt');
-  await execAsync(`pdftotext -q -layout -nopgbrk "${pdfPath}" "${textFile}"`);
-  const raw = fs.readFileSync(textFile, 'utf-8');
-  return raw.split(/\f/).map((p) => p.trim());
-}
 
-async function extractImagesPDF(pdfPath: string, outputDir: string): Promise<string[]> {
-  await execAsync(
-    `pdftoppm -q -png -rx 100 -ry 100 "${pdfPath}" "${path.join(
-      outputDir,
-      'page'
-    )}"`
-  );
-  return fs
-    .readdirSync(outputDir)
-    .filter((f) => f.endsWith('.png'))
-    .map((f) => path.join(outputDir, f))
-    .sort();
-}
 
-async function extractTextDOCX(docxPath: string): Promise<string> {
-  const buffer = fs.readFileSync(docxPath);
-  const { value } = await mammoth.extractRawText({ buffer });
-  return value.trim();
-}
+import { fileProcessingQueue } from './queue';
 
-async function extractImagesDOCX(docxPath: string, outputDir: string): Promise<string[]> {
-  const archive = await unzipper.Open.file(docxPath);
-  const mediaFiles = archive.files.filter((f) =>
-    f.path.startsWith('word/media/')
-  );
-  return Promise.all(
-    mediaFiles.map(async (file, i) => {
-      const ext = path.extname(file.path);
-      const outPath = path.join(outputDir, `doc-img-${i + 1}${ext}`);
-      const content = await file.buffer();
-      fs.writeFileSync(outPath, content);
-      return outPath;
-    })
-  );
-}
+app.get('/jobs', async (req, res) => {
+  const jobs = await fileProcessingQueue.getJobs(['completed', 'failed', 'active', 'waiting']);
+  res.json(jobs);
+});
 
-async function extractTextSlidesPPTX(
-  archive: unzipper.CentralDirectory
-): Promise<string[]> {
-  const slides = archive.files
-    .filter((f) => f.path.match(/^ppt\/slides\/slide\d+\.xml$/))
-    .sort((a, b) => a.path.localeCompare(b.path));
-  return Promise.all(
-    slides.map(async (slide) => {
-      const content = await slide.buffer();
-      const parsed = await parseStringPromise(content.toString());
-      const shapes =
-        parsed['p:sld']?.['p:cSld']?.[0]?.['p:spTree']?.[0]?.['p:sp'] || [];
-      return shapes
-        .map((shape: any) => {
-          const ps = shape['p:txBody']?.[0]?.['a:p'] || [];
-          return ps
-            .map((p: any) =>
-              (p['a:r'] || []).map((r: any) => r['a:t']?.[0] || '').join('')
-            )
-            .join('\n');
-        })
-        .join('\n')
-        .trim();
-    })
-  );
-}
-
-async function extractImagesPPTX(
-  archive: unzipper.CentralDirectory,
-  outputDir: string
-): Promise<string[]> {
-  const mediaFiles = archive.files.filter((f) =>
-    f.path.startsWith('ppt/media/')
-  );
-  const imagePaths = await Promise.all(
-    mediaFiles.map(async (file, i) => {
-      const ext = path.extname(file.path);
-      const outPath = path.join(outputDir, `slide-${i + 1}${ext}`);
-      const content = await file.buffer();
-      fs.writeFileSync(outPath, content);
-      return outPath;
-    })
-  );
-  return imagePaths.sort();
-}
+app.get('/job/:id', async (req, res) => {
+  const job = await fileProcessingQueue.getJob(req.params.id);
+  if (job) {
+    res.json({
+      id: job.id,
+      progress: job.progress,
+      result: job.returnvalue,
+      failedReason: job.failedReason
+    });
+  } else {
+    res.status(404).json({ error: 'Job not found' });
+  }
+});
 
 app.post('/upload', upload.array('files'), async (req, res) => {
   if (!req.files || req.files.length === 0) {
@@ -145,80 +79,19 @@ app.post('/upload', upload.array('files'), async (req, res) => {
   }
 
   const files = req.files as Express.Multer.File[];
-  const results = [];
+  const jobIds = [];
 
   for (const file of files) {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const base = path.basename(file.originalname, ext);
-    const outputDir = `uploads/res_${base}`;
-    fs.mkdirSync(outputDir, { recursive: true });
-
-    const outputJSON: {
-      text: string;
-      image: string;
-    }[] = [];
-
-    try {
-      if (ext === '.pdf') {
-        const [texts, images] = await Promise.all([
-          extractTextPDF(file.path, outputDir),
-          extractImagesPDF(file.path, outputDir),
-        ]);
-        for (let i = 0; i < Math.max(texts.length, images.length); i++) {
-          const imagePath = images[i] || '';
-          outputJSON.push({
-            text: texts[i] || '',
-            image: imagePath,
-          });
-        }
-      } else if (ext === '.docx') {
-        const [text, images] = await Promise.all([
-          extractTextDOCX(file.path),
-          extractImagesDOCX(file.path, outputDir),
-        ]);
-        if (images.length === 0) {
-          outputJSON.push({ text, image: '' });
-        } else {
-          for (const img of images) {
-            outputJSON.push({
-              text,
-              image: img,
-            });
-          }
-        }
-      } else if (ext === '.pptx' || ext === '.ppt') {
-        const archive = await unzipper.Open.file(file.path);
-        const [texts, images] = await Promise.all([
-          extractTextSlidesPPTX(archive),
-          extractImagesPPTX(archive, outputDir),
-        ]);
-        for (let i = 0; i < Math.max(texts.length, images.length); i++) {
-          const imagePath = images[i] || '';
-          outputJSON.push({
-            text: texts[i] || '',
-            image: imagePath,
-          });
-        }
-      } else if (ext === '.txt') {
-        const text = fs.readFileSync(file.path, 'utf-8');
-        outputJSON.push({ text, image: '' });
-      }
-
-      results.push({
-        filename: file.originalname,
-        outputDir,
-        data: outputJSON,
-      });
-    } catch (error) {
-      console.error(error);
-      results.push({
-        filename: file.originalname,
-        error: 'Failed to process file.',
-      });
-    }
+    const job = await fileProcessingQueue.add('process-file', {
+      filename: file.filename,
+      path: file.path,
+      originalname: file.originalname,
+      mimetype: file.mimetype,
+    });
+    jobIds.push(job.id);
   }
 
-  res.json(results);
+  res.json({ message: 'Files uploaded and queued for processing.', jobIds });
 });
 
 export default app;

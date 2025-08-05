@@ -1,23 +1,18 @@
+
 "use client";
 import { useState } from "react";
+import { useRouter } from 'next/navigation';
 import axios from "axios";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-interface UploadResult {
-  filename: string;
-  outputDir: string;
-  error?: string;
-  data?: any[];
-}
-
 export default function FileUpload() {
   const [files, setFiles] = useState<FileList | null>(null);
-  const [results, setResults] = useState<UploadResult[]>([]);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const router = useRouter();
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFiles(e.target.files);
@@ -28,7 +23,6 @@ export default function FileUpload() {
 
     setUploading(true);
     setProgress(0);
-    setResults([]);
 
     const formData = new FormData();
     for (let i = 0; i < files.length; i++) {
@@ -36,7 +30,7 @@ export default function FileUpload() {
     }
 
     try {
-      const response = await axios.post(
+      await axios.post(
         "http://localhost:3001/upload",
         formData,
         {
@@ -50,7 +44,7 @@ export default function FileUpload() {
           },
         }
       );
-      setResults(response.data);
+      router.push('/dashboard');
     } catch (error) {
       console.error(error);
       // Handle error gracefully in UI
@@ -77,24 +71,8 @@ export default function FileUpload() {
           </Button>
         </div>
         {uploading && <Progress value={progress} className="w-full mt-4" />}
-        {results.length > 0 && (
-          <div className="mt-4">
-            <h3 className="text-lg font-semibold">Results:</h3>
-            <ul>
-              {results.map((result, index) => (
-                <li key={index}>
-                  <strong>{result.filename}</strong>
-                  {result.error ? (
-                    <span className="text-red-500"> - {result.error}</span>
-                  ) : (
-                    <span> - Uploaded to {result.outputDir}</span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
       </CardContent>
     </Card>
   );
 }
+

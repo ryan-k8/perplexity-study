@@ -1,4 +1,5 @@
 import app from './server';
+import './worker';
 
 const port = process.env.PORT || 3001;
 
